@@ -44,13 +44,14 @@ def reset_root_state_ref_trajectory(
     """
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    num_envs = len(env_ids) if not isinstance(env_ids, slice) else env.num_envs
     # get default root state
     root_states = asset.data.default_root_state.torch[env_ids].clone()
 
     # from reference buffer, find where to reset to
     command_manager_term = env.command_manager._terms[command_term]
     command_manager_term.reference[env_ids] = command_manager_term.reference_buffer[
-        torch.randint(0, command_manager_term.reference_buffer.shape[0], (len(env_ids),), device=env.device)
+        torch.randint(0, command_manager_term.reference_buffer.shape[0], (num_envs,), device=env.device)
     ]
 
     sampled_states = command_manager_term.reference[:, :, 0] > command_manager_term.sim_time.unsqueeze(1)
@@ -60,7 +61,7 @@ def reset_root_state_ref_trajectory(
     # poses
     range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     ranges = torch.tensor(range_list, device=asset.device)
-    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (num_envs, 6), device=asset.device)
 
     positions = (
         root_states[:, 0:3] + env.scene.env_origins[env_ids] + rand_samples[:, 0:3] + reset_pose[env_ids][..., :3]
@@ -70,7 +71,7 @@ def reset_root_state_ref_trajectory(
     # velocities
     range_list = [velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     ranges = torch.tensor(range_list, device=asset.device)
-    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (num_envs, 6), device=asset.device)
 
     velocities = root_states[:, 7:13] + rand_samples
     # set into the physics simulation
@@ -103,6 +104,7 @@ def reset_root_state_uniform_collision_check(
     """
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    num_envs = len(env_ids) if not isinstance(env_ids, slice) else env.num_envs
     # get default root state
     root_states = asset.data.default_root_state.torch[env_ids].clone()
 
@@ -110,12 +112,12 @@ def reset_root_state_uniform_collision_check(
     range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     ranges = torch.tensor(range_list, device=asset.device)
     # Initialize rand_samples and positions
-    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (num_envs, 6), device=asset.device)
     positions = root_states[:, 0:3] + env.scene.env_origins[env_ids] + rand_samples[:, 0:3]
 
     # Collision check and resampling
     collision_threshold = 1.5  # meters
-    in_collision = torch.ones(len(env_ids), device=asset.device, dtype=torch.bool)  # Start with all envs in collision
+    in_collision = torch.ones(num_envs, device=asset.device, dtype=torch.bool)  # Start with all envs in collision
 
     while in_collision.any():
         for rigid_body in env.scene.rigid_objects.values():
@@ -145,7 +147,7 @@ def reset_root_state_uniform_collision_check(
     # velocities
     range_list = [velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     ranges = torch.tensor(range_list, device=asset.device)
-    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (num_envs, 6), device=asset.device)
 
     velocities = root_states[:, 7:13] + rand_samples
 

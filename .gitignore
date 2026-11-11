@@ -10,3 +10,5 @@ profile.sh
 *.sqlite3
 *.db
 reference_trajectories/
+.pixi/
+

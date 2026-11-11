@@ -20,6 +20,14 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--plot_data", type=bool, default=None, help="Plot data of the current run")
+parser.add_argument(
+    "--real-time",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Run in real-time (default: True). Pass --no-real-time for unthrottled execution.",
+)
+parser.add_argument("--headless", action="store_true", default=False, help="Force headless execution.")
+parser.add_argument("--max_timesteps", type=int, default=None, help="Maximum timesteps to simulate.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -28,6 +36,11 @@ args_cli = parser.parse_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
+
+# In Isaac Lab 3.0, unless headless or livestream is requested, default to the Kit visualizer
+# to open the GUI viewport window for real-time visualization.
+if not args_cli.headless and args_cli.visualizer is None and getattr(args_cli, "livestream", 0) == 0:
+    args_cli.visualizer = ["kit"]
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -40,6 +53,7 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import time
 from importlib import metadata
 import torch
 
@@ -69,23 +83,49 @@ def main():
     resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
 
-    # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    # wrap for video recording
+    # configure camera visualizer on environment config
+    from isaaclab_visualizers.kit import KitVisualizerCfg
+
+    if not hasattr(env_cfg.sim, "visualizer_cfgs") or env_cfg.sim.visualizer_cfgs is None:
+        env_cfg.sim.visualizer_cfgs = []
+    env_cfg.sim.visualizer_cfgs.append(
+        KitVisualizerCfg(
+            headless=args_cli.headless,
+            eye=(2.4, -2.4, 1.5),
+            lookat=(0.0, 0.0, 1.0),
+        )
+    )
+
+    # configure video recording on environment config
     if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+        from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+
+        video_dir = os.path.join(log_dir, "videos", "play")
+        env_cfg.video_recorders = [
+            VideoRecorderCfg(
+                source="visualizer:kit",
+                output_dir=video_dir,
+                video_length=args_cli.video_length,
+                video_interval=0,
+            )
+        ]
+        print(f"[INFO] Video recording enabled: saving {args_cli.video_length} steps to {video_dir}")
+
+    # create isaac environment
+    env = gym.make(args_cli.task, cfg=env_cfg)
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env)
 
+    try:
+        dt = env.step_dt
+    except AttributeError:
+        dt = env.unwrapped.step_dt
+
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+
+    # rsl-rl 5.x reads cfg["actor"]/cfg["critic"] and no longer accepts the legacy
+    # single-network `policy` block; this drops the deprecated keys for the installed version.
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
 
     # load previously trained model
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
@@ -96,10 +136,20 @@ def main():
 
     # export policy to onnx
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_onnx(ppo_runner.alg.actor_critic, export_model_dir, filename="policy.onnx")
+    try:
+        if hasattr(ppo_runner, "export_policy_to_onnx"):
+            ppo_runner.export_policy_to_onnx(export_model_dir, filename="policy.onnx")
+        elif hasattr(ppo_runner.alg, "actor_critic"):
+            export_policy_as_onnx(ppo_runner.alg.actor_critic, export_model_dir, filename="policy.onnx")
+        else:
+            export_policy_as_onnx(ppo_runner.alg.get_policy(), export_model_dir, filename="policy.onnx")
+    except Exception as e:
+        print(f"[WARNING]: Failed to export policy to ONNX: {e}")
 
     # reset environment
-    obs, _ = env.get_observations()
+    obs = env.get_observations()
+    if isinstance(obs, tuple):
+        obs = obs[0]
     timestep = 0
 
     # create lists for action plots
@@ -201,6 +251,7 @@ def main():
 
     # simulate environment
     while simulation_app.is_running():
+        start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
@@ -209,6 +260,7 @@ def main():
             obs, rewards, dones, _ = env.step(actions)
             timestep += 1
             if args_cli.plot_data:
+                obs_data = obs["policy"] if hasattr(obs, "keys") and "policy" in obs.keys() else obs
 
                 # append actions
                 drone_1_forces.append(actions[:, 0].cpu().numpy())
@@ -225,97 +277,99 @@ def main():
                 drone_3_z_torque.append(actions[:, 11].cpu().numpy())
 
                 # append payload observations
-                payload_pos_x.append(obs[:, 0].cpu().numpy())
-                payload_pos_y.append(obs[:, 1].cpu().numpy())
-                payload_pos_z.append(obs[:, 2].cpu().numpy())
-                payload_quat_w.append(obs[:, 3].cpu().numpy())
-                payload_quat_x.append(obs[:, 4].cpu().numpy())
-                payload_quat_y.append(obs[:, 5].cpu().numpy())
-                payload_quat_z.append(obs[:, 6].cpu().numpy())
-                payload_lin_vel_x.append(obs[:, 7].cpu().numpy())
-                payload_lin_vel_y.append(obs[:, 8].cpu().numpy())
-                payload_lin_vel_z.append(obs[:, 9].cpu().numpy())
-                payload_ang_vel_x.append(obs[:, 10].cpu().numpy())
-                payload_ang_vel_y.append(obs[:, 11].cpu().numpy())
-                payload_ang_vel_z.append(obs[:, 12].cpu().numpy())
+                payload_pos_x.append(obs_data[:, 0].cpu().numpy())
+                payload_pos_y.append(obs_data[:, 1].cpu().numpy())
+                payload_pos_z.append(obs_data[:, 2].cpu().numpy())
+                payload_quat_w.append(obs_data[:, 3].cpu().numpy())
+                payload_quat_x.append(obs_data[:, 4].cpu().numpy())
+                payload_quat_y.append(obs_data[:, 5].cpu().numpy())
+                payload_quat_z.append(obs_data[:, 6].cpu().numpy())
+                payload_lin_vel_x.append(obs_data[:, 7].cpu().numpy())
+                payload_lin_vel_y.append(obs_data[:, 8].cpu().numpy())
+                payload_lin_vel_z.append(obs_data[:, 9].cpu().numpy())
+                payload_ang_vel_x.append(obs_data[:, 10].cpu().numpy())
+                payload_ang_vel_y.append(obs_data[:, 11].cpu().numpy())
+                payload_ang_vel_z.append(obs_data[:, 12].cpu().numpy())
 
                 # append drone observations
-                drone_1_pos_x.append(obs[:, 13].cpu().numpy())
-                drone_1_pos_y.append(obs[:, 14].cpu().numpy())
-                drone_1_pos_z.append(obs[:, 15].cpu().numpy())
-                drone_2_pos_x.append(obs[:, 16].cpu().numpy())
-                drone_2_pos_y.append(obs[:, 17].cpu().numpy())
-                drone_2_pos_z.append(obs[:, 18].cpu().numpy())
-                drone_3_pos_x.append(obs[:, 19].cpu().numpy())
-                drone_3_pos_y.append(obs[:, 20].cpu().numpy())
-                drone_3_pos_z.append(obs[:, 21].cpu().numpy())
+                drone_1_pos_x.append(obs_data[:, 13].cpu().numpy())
+                drone_1_pos_y.append(obs_data[:, 14].cpu().numpy())
+                drone_1_pos_z.append(obs_data[:, 15].cpu().numpy())
+                drone_2_pos_x.append(obs_data[:, 16].cpu().numpy())
+                drone_2_pos_y.append(obs_data[:, 17].cpu().numpy())
+                drone_2_pos_z.append(obs_data[:, 18].cpu().numpy())
+                drone_3_pos_x.append(obs_data[:, 19].cpu().numpy())
+                drone_3_pos_y.append(obs_data[:, 20].cpu().numpy())
+                drone_3_pos_z.append(obs_data[:, 21].cpu().numpy())
 
-                drone_1_quat_w.append(obs[:, 22].cpu().numpy())
-                drone_1_quat_x.append(obs[:, 23].cpu().numpy())
-                drone_1_quat_y.append(obs[:, 24].cpu().numpy())
-                drone_1_quat_z.append(obs[:, 25].cpu().numpy())
-                drone_2_quat_w.append(obs[:, 26].cpu().numpy())
-                drone_2_quat_x.append(obs[:, 27].cpu().numpy())
-                drone_2_quat_y.append(obs[:, 28].cpu().numpy())
-                drone_2_quat_z.append(obs[:, 29].cpu().numpy())
-                drone_3_quat_w.append(obs[:, 30].cpu().numpy())
-                drone_3_quat_x.append(obs[:, 31].cpu().numpy())
-                drone_3_quat_y.append(obs[:, 32].cpu().numpy())
-                drone_3_quat_z.append(obs[:, 33].cpu().numpy())
+                drone_1_quat_w.append(obs_data[:, 22].cpu().numpy())
+                drone_1_quat_x.append(obs_data[:, 23].cpu().numpy())
+                drone_1_quat_y.append(obs_data[:, 24].cpu().numpy())
+                drone_1_quat_z.append(obs_data[:, 25].cpu().numpy())
+                drone_2_quat_w.append(obs_data[:, 26].cpu().numpy())
+                drone_2_quat_x.append(obs_data[:, 27].cpu().numpy())
+                drone_2_quat_y.append(obs_data[:, 28].cpu().numpy())
+                drone_2_quat_z.append(obs_data[:, 29].cpu().numpy())
+                drone_3_quat_w.append(obs_data[:, 30].cpu().numpy())
+                drone_3_quat_x.append(obs_data[:, 31].cpu().numpy())
+                drone_3_quat_y.append(obs_data[:, 32].cpu().numpy())
+                drone_3_quat_z.append(obs_data[:, 33].cpu().numpy())
 
-                drone_1_lin_vel_x.append(obs[:, 34].cpu().numpy())
-                drone_1_lin_vel_y.append(obs[:, 35].cpu().numpy())
-                drone_1_lin_vel_z.append(obs[:, 36].cpu().numpy())
-                drone_2_lin_vel_x.append(obs[:, 37].cpu().numpy())
-                drone_2_lin_vel_y.append(obs[:, 38].cpu().numpy())
-                drone_2_lin_vel_z.append(obs[:, 39].cpu().numpy())
-                drone_3_lin_vel_x.append(obs[:, 40].cpu().numpy())
-                drone_3_lin_vel_y.append(obs[:, 41].cpu().numpy())
-                drone_3_lin_vel_z.append(obs[:, 42].cpu().numpy())
+                drone_1_lin_vel_x.append(obs_data[:, 34].cpu().numpy())
+                drone_1_lin_vel_y.append(obs_data[:, 35].cpu().numpy())
+                drone_1_lin_vel_z.append(obs_data[:, 36].cpu().numpy())
+                drone_2_lin_vel_x.append(obs_data[:, 37].cpu().numpy())
+                drone_2_lin_vel_y.append(obs_data[:, 38].cpu().numpy())
+                drone_2_lin_vel_z.append(obs_data[:, 39].cpu().numpy())
+                drone_3_lin_vel_x.append(obs_data[:, 40].cpu().numpy())
+                drone_3_lin_vel_y.append(obs_data[:, 41].cpu().numpy())
+                drone_3_lin_vel_z.append(obs_data[:, 42].cpu().numpy())
 
-                drone_1_ang_vel_x.append(obs[:, 43].cpu().numpy())
-                drone_1_ang_vel_y.append(obs[:, 44].cpu().numpy())
-                drone_1_ang_vel_z.append(obs[:, 45].cpu().numpy())
-                drone_2_ang_vel_x.append(obs[:, 46].cpu().numpy())
-                drone_2_ang_vel_y.append(obs[:, 47].cpu().numpy())
-                drone_2_ang_vel_z.append(obs[:, 48].cpu().numpy())
-                drone_3_ang_vel_x.append(obs[:, 49].cpu().numpy())
-                drone_3_ang_vel_y.append(obs[:, 50].cpu().numpy())
-                drone_3_ang_vel_z.append(obs[:, 51].cpu().numpy())
+                drone_1_ang_vel_x.append(obs_data[:, 43].cpu().numpy())
+                drone_1_ang_vel_y.append(obs_data[:, 44].cpu().numpy())
+                drone_1_ang_vel_z.append(obs_data[:, 45].cpu().numpy())
+                drone_2_ang_vel_x.append(obs_data[:, 46].cpu().numpy())
+                drone_2_ang_vel_y.append(obs_data[:, 47].cpu().numpy())
+                drone_2_ang_vel_z.append(obs_data[:, 48].cpu().numpy())
+                drone_3_ang_vel_x.append(obs_data[:, 49].cpu().numpy())
+                drone_3_ang_vel_y.append(obs_data[:, 50].cpu().numpy())
+                drone_3_ang_vel_z.append(obs_data[:, 51].cpu().numpy())
 
                 # append cable angles
-                cable_angle_1_w.append(obs[:, 92].cpu().numpy())
-                cable_angle_1_x.append(obs[:, 93].cpu().numpy())
-                cable_angle_1_y.append(obs[:, 94].cpu().numpy())
-                cable_angle_1_z.append(obs[:, 95].cpu().numpy())
+                cable_angle_1_w.append(obs_data[:, 92].cpu().numpy())
+                cable_angle_1_x.append(obs_data[:, 93].cpu().numpy())
+                cable_angle_1_y.append(obs_data[:, 94].cpu().numpy())
+                cable_angle_1_z.append(obs_data[:, 95].cpu().numpy())
 
-                cable_angle_2_w.append(obs[:, 96].cpu().numpy())
-                cable_angle_2_x.append(obs[:, 97].cpu().numpy())
-                cable_angle_2_y.append(obs[:, 98].cpu().numpy())
-                cable_angle_2_z.append(obs[:, 99].cpu().numpy())
+                cable_angle_2_w.append(obs_data[:, 96].cpu().numpy())
+                cable_angle_2_x.append(obs_data[:, 97].cpu().numpy())
+                cable_angle_2_y.append(obs_data[:, 98].cpu().numpy())
+                cable_angle_2_z.append(obs_data[:, 99].cpu().numpy())
 
-                cable_angle_3_w.append(obs[:, 100].cpu().numpy())
-                cable_angle_3_x.append(obs[:, 101].cpu().numpy())
-                cable_angle_3_y.append(obs[:, 102].cpu().numpy())
-                cable_angle_3_z.append(obs[:, 103].cpu().numpy())
+                cable_angle_3_w.append(obs_data[:, 100].cpu().numpy())
+                cable_angle_3_x.append(obs_data[:, 101].cpu().numpy())
+                cable_angle_3_y.append(obs_data[:, 102].cpu().numpy())
+                cable_angle_3_z.append(obs_data[:, 103].cpu().numpy())
 
                 # append payload errors
-                payload_pos_error_x.append(obs[:, 52].cpu().numpy())
-                payload_pos_error_y.append(obs[:, 53].cpu().numpy())
-                payload_pos_error_z.append(obs[:, 54].cpu().numpy())
-                payload_quat_error_w.append(obs[:, 55].cpu().numpy())
-                payload_quat_error_x.append(obs[:, 56].cpu().numpy())
-                payload_quat_error_y.append(obs[:, 57].cpu().numpy())
-                payload_quat_error_z.append(obs[:, 58].cpu().numpy())
+                payload_pos_error_x.append(obs_data[:, 52].cpu().numpy())
+                payload_pos_error_y.append(obs_data[:, 53].cpu().numpy())
+                payload_pos_error_z.append(obs_data[:, 54].cpu().numpy())
+                payload_quat_error_w.append(obs_data[:, 55].cpu().numpy())
+                payload_quat_error_x.append(obs_data[:, 56].cpu().numpy())
+                payload_quat_error_y.append(obs_data[:, 57].cpu().numpy())
+                payload_quat_error_z.append(obs_data[:, 58].cpu().numpy())
 
-                if dones | timestep == args_cli.video_length:
-                    break
-
+        if args_cli.max_timesteps and timestep >= args_cli.max_timesteps:
+            break
         if args_cli.video:
-            # timestep += 1
             # Exit the play loop after recording one video
-            if timestep == args_cli.video_length:
+            if timestep >= args_cli.video_length:
                 break
+
+        sleep_time = dt - (time.time() - start_time)
+        if args_cli.real_time and sleep_time > 0:
+            time.sleep(sleep_time)
 
     if args_cli.plot_data:
         # Plot action data
@@ -548,8 +602,15 @@ def main():
         plt.title("Payload Orientation Error")
         plt.legend()
 
-        plt.tight_layout()
-        plt.show()
+        plot_path = os.path.join(log_dir, "plots", "play")
+        os.makedirs(plot_path, exist_ok=True)
+        for i in plt.get_fignums():
+            fig = plt.figure(i)
+            fig.tight_layout()
+            save_file = os.path.join(plot_path, f"figure_{i}.png")
+            fig.savefig(save_file)
+            print(f"Figure saved: {save_file}")
+            plt.close(fig)
 
     # close the simulator
     env.close()

@@ -103,7 +103,8 @@ class UniformPoseCommandGlobal(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         # sample new pose targets
         # -- position
-        r = torch.empty(len(env_ids), device=self.device)
+        num_envs = len(env_ids) if not isinstance(env_ids, slice) else self.num_envs
+        r = torch.empty(num_envs, device=self.device)
         self.pose_command_w[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
         self.pose_command_w[env_ids, 1] = r.uniform_(*self.cfg.ranges.pos_y)
         self.pose_command_w[env_ids, 2] = r.uniform_(*self.cfg.ranges.pos_z)
@@ -507,7 +508,8 @@ class UniformTwistCommandGlobal(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         # sample new pose targets
         # -- position
-        r = torch.empty(len(env_ids), device=self.device)
+        num_envs = len(env_ids) if not isinstance(env_ids, slice) else self.num_envs
+        r = torch.empty(num_envs, device=self.device)
         self.pose_command_w[env_ids, 0] = r.uniform_(*self.cfg.ranges.pos_x)
         self.pose_command_w[env_ids, 1] = r.uniform_(*self.cfg.ranges.pos_y)
         self.pose_command_w[env_ids, 2] = r.uniform_(*self.cfg.ranges.pos_z)

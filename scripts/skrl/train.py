@@ -45,6 +45,7 @@ parser.add_argument(
 )
 parser.add_argument("--resume", action="store_true", default=False, help="Resume training from a checkpoint.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to the checkpoint to resume training.")
+parser.add_argument("--headless", action="store_true", default=False, help="Force headless execution.")
 
 
 # append AppLauncher cli args
@@ -55,7 +56,8 @@ args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video:
     args_cli.enable_cameras = True
 
-# clear out sys.argv for Hydra
+# clear out sys.argv for Hydra, keeping only valid Hydra overrides (key=value)
+hydra_args = [arg for arg in hydra_args if "=" in arg or not arg.startswith("--")]
 sys.argv = [sys.argv[0]] + hydra_args
 
 # launch omniverse app
@@ -100,16 +102,16 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
-from isaaclab_tasks.utils import get_checkpoint_path
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils import get_checkpoint_path, resolve_task_config
 
 # config shortcuts
 algorithm = args_cli.algorithm.lower()
 agent_cfg_entry_point = "skrl_cfg_entry_point" if algorithm in ["ppo"] else f"skrl_{algorithm}_cfg_entry_point"
 
 
-@hydra_task_config(args_cli.task, agent_cfg_entry_point)
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
+def main():
+    """Train with skrl agent."""
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, agent_cfg_entry_point)
     """Train with skrl agent."""
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs

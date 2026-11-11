@@ -10,7 +10,7 @@ from MARL_mav_carry_ext.assets import FLYPENT_CFG
 
 import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectMARLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
@@ -19,6 +19,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 
 
@@ -95,6 +96,28 @@ class EventCfg:
             "force_range": (0.0, 0.0),
             "torque_range": (-0.0, 0.0),
         },
+    )
+
+
+@configclass
+class MARLHoverFlypentSceneCfg(InteractiveSceneCfg):
+    """Configuration for the hovering flypent scene with assets replicated across environments."""
+
+    ground = AssetBaseCfg(
+        prim_path="/World/defaultGroundPlane",
+        spawn=sim_utils.GroundPlaneCfg(color=(0.3, 0.3, 0.3)),
+    )
+    sky_light = AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=750.0,
+            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+    robot: ArticulationCfg = FLYPENT_CFG.replace(prim_path="{ENV_REGEX_NS}/flypent")
+    robot.spawn.activate_contact_sensors = True
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/flypent/.*", update_period=0.0, history_length=3, debug_vis=False
     )
 
 
@@ -240,6 +263,6 @@ class MARLHoverFlypentEnvCfg(DirectMARLEnvCfg):
         marker_cfg_body.prim_path = "/Visuals/Command/body_pose"
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=8.0, replicate_physics=True)
+    scene: MARLHoverFlypentSceneCfg = MARLHoverFlypentSceneCfg(num_envs=1, env_spacing=8.0, replicate_physics=True)
 
     events = EventCfg()

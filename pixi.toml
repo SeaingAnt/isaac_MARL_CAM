@@ -1,0 +1,42 @@
+[workspace]
+name = "marl-cooperative-aerial-manipulation"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[system-requirements]
+libc = { family = "glibc", version = "2.35" }
+
+[pypi-options]
+extra-index-urls = ["https://pypi.nvidia.com"]
+index-strategy = "unsafe-best-match"
+prerelease-mode = "allow"
+
+[pypi-options.dependency-overrides]
+urllib3 = ">=2.8.0"
+packaging = "<=26.0,>=23.2"
+
+[activation.env]
+OMNI_KIT_ACCEPT_EULA = "YES"
+PYTHONPATH = ""
+
+[dependencies]
+python = "3.12.*"
+git-lfs = ">=3.8.1,<4"
+
+[pypi-dependencies]
+isaaclab = { version = "==3.0.0", extras = ["isaacsim"] }
+skrl = { git = "https://github.com/jackzeng-robotics/skrl.git" }
+MARL_mav_carry_ext = { path = "exts/MARL_mav_carry_ext", editable = true }
+pytest = "*"
+moviepy = ">=1.0.3,<2.0.0.dev0"
+imageio-ffmpeg = "*"
+
+[tasks]
+pull-assets = "git-lfs install --local && git-lfs pull && git-lfs checkout"
+test = "pytest -p no:launch_testing -q tests/test_directmarl_envs.py"
+train-mappo = "python scripts/skrl/train.py --task=Isaac-flycrane-payload-decentralized-hovering-v0 --headless --num_envs=512 --seed=42 --algorithm=MAPPO"
+train-ppo = "python scripts/skrl/train.py --task=Isaac-flycrane-payload-decentralized-hovering-v0 --headless --num_envs=2042 --seed=42 --algorithm=PPO"
+train-rsl-rl = "python scripts/rsl_rl/train.py --task=Isaac-flycrane-payload-hovering-v0 --headless --num_envs=512"
+play = "python scripts/skrl/play.py --task=Isaac-flycrane-payload-decentralized-hovering-v0 --num_envs=1 --save_plots"
+play-rsl-rl = "python scripts/rsl_rl/play.py --task=Isaac-flycrane-payload-hovering-v0 --num_envs=1"
+play-mappo = "python scripts/skrl/play.py --task=Isaac-flycrane-payload-decentralized-hovering-v0 --algorithm=MAPPO --num_envs=1 --save_plots"

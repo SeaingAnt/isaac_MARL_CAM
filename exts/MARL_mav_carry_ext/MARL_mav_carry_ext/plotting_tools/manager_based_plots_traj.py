@@ -14,11 +14,21 @@ class ManagerBasedPlotterTraj:
 
         # environment
         self.command_name = command_name
-        self.env = env
-        self.robot = env.scene[asset_cfg.name]
+        curr_env = env
+        while True:
+            if hasattr(curr_env, "env") and getattr(curr_env, "env") is not curr_env:
+                curr_env = curr_env.env
+            elif hasattr(curr_env, "_env") and getattr(curr_env, "_env") is not curr_env:
+                curr_env = curr_env._env
+            elif hasattr(curr_env, "unwrapped") and getattr(curr_env, "unwrapped") is not curr_env:
+                curr_env = curr_env.unwrapped
+            else:
+                break
+        self.env = curr_env
+        self.robot = self.env.scene[asset_cfg.name]
         self.load_id = self.robot.find_bodies("load_odometry_sensor_link")[0]
         self.drone_idx = self.robot.find_bodies("Falcon.*base_link")[0]
-        self.sim_dt = env.sim.get_rendering_dt()
+        self.sim_dt = self.env.sim.get_rendering_dt()
 
         # buffers
         self.metrics: dict = {}
@@ -225,6 +235,8 @@ class ManagerBasedPlotterTraj:
                 save_path = os.path.join(save_dir, f"figure_{fig_idx + 1}.{file_format}")
                 fig.savefig(save_path)
                 print(f"Figure saved: {save_path}")
+                plt.close(fig)
 
-        plt.tight_layout()
-        plt.show()
+        if not save:
+            plt.tight_layout()
+            plt.show()

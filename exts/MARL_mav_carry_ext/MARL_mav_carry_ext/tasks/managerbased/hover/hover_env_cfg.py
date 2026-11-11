@@ -15,6 +15,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass  # explicit: isaaclab.utils lazy-exports this name and it can be shadowed by the submodule
 
 from MARL_mav_carry_ext.assets.flycrane import FLYCRANE_OLD_CFG as FLYCRANE_CFG  # isort:skip
@@ -27,11 +28,18 @@ class CarryingSceneCfg(InteractiveSceneCfg):
     """Configuration for multi-drone lifting system"""
 
     # Ground-plane
-    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
+    ground = AssetBaseCfg(
+        prim_path="/World/defaultGroundPlane",
+        spawn=sim_utils.GroundPlaneCfg(color=(0.3, 0.3, 0.3)),
+    )
 
     # Lights
-    distant_light = AssetBaseCfg(
-        prim_path="/World/Light", spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+    sky_light = AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=750.0,
+            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
     )
 
     # Drones

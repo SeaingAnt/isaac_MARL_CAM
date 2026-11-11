@@ -6,11 +6,12 @@
 
 import math
 
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from MARL_mav_carry_ext.assets import FLYCRANE_CFG
 
 import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectMARLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
@@ -95,6 +96,28 @@ class EventCfg:
             "force_range": (0.0, 0.0),
             "torque_range": (-0.0, 0.0),
         },
+    )
+
+
+@configclass
+class MARLHoverSceneCfg(InteractiveSceneCfg):
+    """Configuration for the hovering scene with assets replicated across environments."""
+
+    ground = AssetBaseCfg(
+        prim_path="/World/defaultGroundPlane",
+        spawn=sim_utils.GroundPlaneCfg(color=(0.3, 0.3, 0.3)),
+    )
+    sky_light = AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=750.0,
+            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+    robot: ArticulationCfg = FLYCRANE_CFG.replace(prim_path="{ENV_REGEX_NS}/flycrane")
+    robot.spawn.activate_contact_sensors = True
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/flycrane/.*", update_period=0.0, history_length=3, debug_vis=False
     )
 
 
@@ -208,6 +231,6 @@ class MARLHoverEnvCfg(DirectMARLEnvCfg):
         marker_cfg_body.prim_path = "/Visuals/Command/body_pose"
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=8.0, replicate_physics=True)
+    scene: MARLHoverSceneCfg = MARLHoverSceneCfg(num_envs=1, env_spacing=8.0, replicate_physics=True)
 
     events = EventCfg()

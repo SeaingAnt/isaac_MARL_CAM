@@ -173,18 +173,22 @@ class MARLHoverFlycartEnv(DirectMARLEnv):
         self.set_debug_vis(cfg.debug_vis)
 
     def _setup_scene(self):
-        self.robot = Articulation(self.cfg.robot_cfg)
-        contact_sensors = ContactSensor(self.cfg.contact_forces)
-        # add ground plane
-        spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
-        # clone and replicate (no need to filter for this environment)
-        self.scene.clone_environments(copy_from_source=False)  # TODO: not sure what this does
-        # add articulation to scene - we must register to scene to randomize with EventManager
-        self.scene.articulations["robot"] = self.robot
-        self.scene.sensors["contact_forces"] = contact_sensors
-        # add lights
-        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
-        light_cfg.func("/World/Light", light_cfg)
+        if "robot" in self.scene.articulations:
+            self.robot = self.scene["robot"]
+        else:
+            self.robot = Articulation(self.cfg.robot_cfg)
+            contact_sensors = ContactSensor(self.cfg.contact_forces)
+            # add ground plane
+            spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
+            # clone and replicate (no need to filter for this environment)
+            if hasattr(self.scene, "clone_environments"):
+                self.scene.clone_environments(copy_from_source=False)  # TODO: not sure what this does
+            # add articulation to scene - we must register to scene to randomize with EventManager
+            self.scene.articulations["robot"] = self.robot
+            self.scene.sensors["contact_forces"] = contact_sensors
+            # add lights
+            light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+            light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: dict[str, torch.Tensor]) -> None:
         for agent in self.cfg.possible_agents:
